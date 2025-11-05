@@ -1,0 +1,2 @@
+Use Case1:
+As an agent, I want to create a new commercial auto insurance policy for a business, so that they can get coverage for single vehicle and driver with Comprehensive and Collision Coverage.

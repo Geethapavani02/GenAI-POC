@@ -1,0 +1,59 @@
+
+.login-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding-top: 50px;
+}
+.login-box {
+    background-color: #f9f9f9;
+    padding: 30px 40px;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    width: 100%;
+    max-width: 400px;
+}
+.login-title {
+    text-align: center;
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 20px;
+}
+.stButton>button {
+    width: 100%;
+    background-color: #4682B4;
+    color: white;
+    font-weight: bold;
+    border-radius: 8px;
+    padding: 10px;
+}
+.stButton>button:active,
+    .stButton>button:focus {
+     background-color: #4682B4 !important;
+     color: white !important;
+    box-shadow: 0 0 0 2px rgba(70, 130, 180, 0.5);
+    }
+
+.stButton>form_submit_button{
+    width: 100%;
+    background-color: #4CAF50;
+    color: white;
+    font-weight: bold;
+    border-radius: 8px;
+    padding: 10px;
+    align-items: center;
+    justify-content: center;
+}
+.custom-download a {
+color: white;
+text-decoration: none;
+font-weight: bold;
+}
+.custom-download a:focus,
+.custom-download a:hover {
+outline: none;
+box-shadow: 0 0 0 2px rgba(70, 130, 180, 0.5);
+background-color: #4682B4 !important;
+}
+
