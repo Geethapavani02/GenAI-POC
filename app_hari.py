@@ -8,6 +8,8 @@ import io
 import csv
 from fpdf import FPDF
 from datetime import datetime
+import requests
+from variables import JIRA_BASE_URL
 
 # Load environment variables
 load_dotenv()
@@ -89,14 +91,69 @@ if st.session_state.logged_in:
         buffer.seek(0)
         return buffer
 
+    def extract_adf_text(adf: dict) -> str:
+        """Rudimentary extraction of plain text from Jira ADF (Atlassian Document Format)."""
+        parts = []
+
+        def walk(node):
+            if not isinstance(node, dict):
+                return
+            node_type = node.get("type")
+            if node_type in ("paragraph", "heading", "blockquote"):
+                for c in node.get("content", []):
+                    walk(c)
+                parts.append("\n")
+            elif node_type == "text":
+                parts.append(node.get("text", ""))
+            else:
+                for c in node.get("content", []):
+                    walk(c)
+
+        walk(adf)
+        text = "".join(parts)
+        # Collapse multiple newlines and strip
+        lines = [line.rstrip() for line in text.splitlines()]
+        return "\n".join([line for line in lines if line.strip() != ""])
+
     # --- Session State Init ---
     if "brd_text" not in st.session_state:
         st.session_state.brd_text = ""
+    if "usecase_text" not in st.session_state:
+        st.session_state.usecase_text = ""
 
-    # --- Use Case Upload ---
-    st.subheader("📥 Upload or Paste Use Case")
+    # --- Use Case Upload / Jira Fetch ---
+    st.subheader("📥 Upload, Paste, or Fetch Use Case from Jira")
+
+    # --- Jira Fetcher ---
+    with st.expander("🔁 Fetch Use Case from Jira"):
+        st.write("Provide your Jira site, credentials (email + API token) and the issue key to fetch the issue description.")
+        jira_url = st.text_input("Jira Base URL (e.g., https://yourorg.atlassian.net)", value=JIRA_BASE_URL, key="jira_url")
+        jira_email = st.text_input("Jira Email (or username)", key="jira_email")
+        jira_api_token = st.text_input("Jira API Token (create at id.atlassian.com/manage-profile/security/api-tokens)", type="password", key="jira_api_token")
+        jira_issue_key = st.text_input("Jira Issue Key (e.g., PROJ-123)", key="jira_issue_key")
+        if st.button("Fetch from Jira"):
+            if not (jira_url and jira_email and jira_api_token and jira_issue_key):
+                st.warning("Please provide Jira URL, email, API token, and issue key.")
+            else:
+                try:
+                    api = f"{jira_url.rstrip('/')}/rest/api/2/issue/{jira_issue_key}?fields=summary,description"
+                    resp = requests.get(api, auth=(jira_email, jira_api_token), headers={"Accept": "application/json"}, timeout=15)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    desc = data.get("fields", {}).get("description")
+                    if isinstance(desc, dict):
+                        fetched_text = extract_adf_text(desc)
+                    else:
+                        fetched_text = desc or ""
+                    if not fetched_text:
+                        fetched_text = data.get("fields", {}).get("summary", "")
+                    st.session_state.usecase_text = fetched_text
+                    st.success("Fetched use case and populated the text area.")
+                except Exception as e:
+                    st.error(f"Failed to fetch from Jira: {e}")
+
     usecase_file = st.file_uploader("Upload Use Case (.txt)", type=["txt"])
-    usecase_text = st.text_area("Or paste use case directly")
+    usecase_text = st.text_area("Or paste use case directly", value=st.session_state.get("usecase_text", ""), key="usecase_text", height=200)
     today = datetime.now().strftime("%B %d,%Y")
 
     final_usecase = ""
