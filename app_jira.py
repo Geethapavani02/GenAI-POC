@@ -139,6 +139,29 @@ if st.session_state.logged_in:
             st.error(f"Failed to attach CSV to Jira: {e}")
             return False
 
+    def attach_excel_to_jira(jira_url: str, jira_email: str, jira_api_token: str, jira_issue_key: str, excel_data: BytesIO, filename: str = "test_cases.xlsx") -> bool:
+        """Attach an Excel file to a Jira issue."""
+        try:
+            # Upload attachment
+            attach_url = f"{jira_url.rstrip('/')}/rest/api/2/issue/{jira_issue_key}/attachments"
+            headers = {
+                "Accept": "application/json",
+                "X-Atlassian-Token": "no-check"
+            }
+            files = {"file": (filename, excel_data.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+            resp = requests.post(
+                attach_url,
+                auth=(jira_email, jira_api_token),
+                headers=headers,
+                files=files,
+                timeout=15
+            )
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            st.error(f"Failed to attach Excel to Jira: {e}")
+            return False
+
     # --- Session State Init ---
     if "brd_text" not in st.session_state:
         st.session_state.brd_text = ""
@@ -154,6 +177,10 @@ if st.session_state.logged_in:
         st.session_state.testcases_df = None
     if "fetched_jira_issue_key" not in st.session_state:
         st.session_state.fetched_jira_issue_key = ""
+    if "testcases_csv_data" not in st.session_state:
+        st.session_state.testcases_csv_data = ""
+    if "testcases_excel_data" not in st.session_state:
+        st.session_state.testcases_excel_data = None
     if "sync_history" not in st.session_state:
         st.session_state.sync_history = []
 
@@ -181,19 +208,33 @@ if st.session_state.logged_in:
                         fetched_text = extract_adf_text(desc)
                     else:
                         fetched_text = desc or ""
-                    if not fetched_text:
-                        fetched_text = data.get("fields", {}).get("summary", "")
-                    st.session_state.usecase_text = fetched_text
-                    st.session_state.fetched_from_jira = True
-                    st.session_state.fetched_jira_issue_key = jira_issue_key
-                    # Log to history
-                    st.session_state.sync_history.append({
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "action": "Jira Fetch",
-                        "issue_key": jira_issue_key,
-                        "status": "✅ Success"
-                    })
-                    st.success("Fetched use case and populated the text area.")
+                    
+                    # Check if description is empty or not available
+                    if not fetched_text or fetched_text.strip() == "":
+                        summary = data.get("fields", {}).get("summary", "")
+                        if summary and summary.strip():
+                            fetched_text = summary
+                            st.warning(f"⚠️ No description found for issue {jira_issue_key}. Using summary instead.")
+                        else:
+                            st.error(f"❌ No description or summary available for issue {jira_issue_key}. Please add a description to this issue.")
+                            st.session_state.sync_history.append({
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "action": "Jira Fetch",
+                                "issue_key": jira_issue_key,
+                                "status": "❌ No description/summary available"
+                            })
+                    else:
+                        st.session_state.usecase_text = fetched_text
+                        st.session_state.fetched_from_jira = True
+                        st.session_state.fetched_jira_issue_key = jira_issue_key
+                        # Log to history
+                        st.session_state.sync_history.append({
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "action": "Jira Fetch",
+                            "issue_key": jira_issue_key,
+                            "status": "✅ Success"
+                        })
+                        st.success("Fetched use case and populated the text area.")
                 except Exception as e:
                     # Log failure to history
                     st.session_state.sync_history.append({
@@ -219,9 +260,13 @@ if st.session_state.logged_in:
         elif usecase_text.strip():
             final_usecase = usecase_text.strip()
     else:
-        st.info("Jira use case fetched — upload a template to generate test cases.")
+        fetched_text = st.session_state.get("usecase_text", "")
+        if not fetched_text or fetched_text.strip() == "":
+            st.info("Jira use case fetched — no description. Upload a template to generate test cases.")
+        else:
+            st.info("Jira use case fetched — upload a template to generate test cases.")
         # Use the fetched usecase as the final_usecase
-        final_usecase = st.session_state.get("usecase_text", "")
+        final_usecase = fetched_text
         usecase_text = final_usecase
 
     # --- Manual BRD Generation ---
@@ -332,6 +377,7 @@ if st.session_state.logged_in:
         st.session_state.testcases_generated = True
         st.session_state.testcases_df = df_result
         st.session_state.testcases_csv_data = csv_data.decode("utf-8")
+        st.session_state.testcases_excel_data = excel_buffer
         # Log to history
         st.session_state.sync_history.append({
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -408,6 +454,45 @@ if st.session_state.logged_in:
                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "action": "CSV Attached to Jira",
                             "issue_key": jira_issue_key_attach,
+                            "status": "❌ Failed"
+                        })
+        
+        with st.expander("🔗 Attach Excel to Jira Issue"):
+            st.write("Attach the generated test cases Excel to the Jira issue.")
+            
+            jira_url_attach_excel = st.text_input("Jira Base URL", value=JIRA_BASE_URL, key="jira_url_attach_excel")
+            jira_email_attach_excel = st.text_input("Jira Email", key="jira_email_attach_excel")
+            jira_api_token_attach_excel = st.text_input("Jira API Token", type="password", key="jira_api_token_attach_excel")
+            jira_issue_key_attach_excel = st.text_input(
+                "Jira Issue Key", 
+                value=st.session_state.get("fetched_jira_issue_key", ""),
+                key="jira_issue_key_attach_excel"
+            )
+            
+            if st.button("📤 Attach Excel to Jira"):
+                if not (jira_url_attach_excel and jira_email_attach_excel and jira_api_token_attach_excel and jira_issue_key_attach_excel):
+                    st.warning("Please provide all Jira details.")
+                else:
+                    success = attach_excel_to_jira(
+                        jira_url_attach_excel,
+                        jira_email_attach_excel,
+                        jira_api_token_attach_excel,
+                        jira_issue_key_attach_excel,
+                        st.session_state.testcases_excel_data
+                    )
+                    if success:
+                        st.session_state.sync_history.append({
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "action": "Excel Attached to Jira",
+                            "issue_key": jira_issue_key_attach_excel,
+                            "status": "✅ Success"
+                        })
+                        st.success(f"✅ Test cases Excel successfully attached to {jira_issue_key_attach_excel}!")
+                    else:
+                        st.session_state.sync_history.append({
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "action": "Excel Attached to Jira",
+                            "issue_key": jira_issue_key_attach_excel,
                             "status": "❌ Failed"
                         })
 
