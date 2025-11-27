@@ -9,7 +9,7 @@ import csv
 from fpdf import FPDF
 from datetime import datetime
 import requests
-from variables import JIRA_BASE_URL
+from variables import JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN
 
 # Load environment variables
 load_dotenv()
@@ -116,6 +116,29 @@ if st.session_state.logged_in:
         lines = [line.rstrip() for line in text.splitlines()]
         return "\n".join([line for line in lines if line.strip() != ""])
 
+    def attach_csv_to_jira(jira_url: str, jira_email: str, jira_api_token: str, jira_issue_key: str, csv_data: str, filename: str = "test_cases.csv") -> bool:
+        """Attach a CSV file to a Jira issue."""
+        try:
+            # Upload attachment
+            attach_url = f"{jira_url.rstrip('/')}/rest/api/2/issue/{jira_issue_key}/attachments"
+            headers = {
+                "Accept": "application/json",
+                "X-Atlassian-Token": "no-check"
+            }
+            files = {"file": (filename, csv_data, "text/csv")}
+            resp = requests.post(
+                attach_url,
+                auth=(jira_email, jira_api_token),
+                headers=headers,
+                files=files,
+                timeout=15
+            )
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            st.error(f"Failed to attach CSV to Jira: {e}")
+            return False
+
     # --- Session State Init ---
     if "brd_text" not in st.session_state:
         st.session_state.brd_text = ""
@@ -127,6 +150,12 @@ if st.session_state.logged_in:
         st.session_state.use_usecase_as_brd = False
     if "testcases_generated" not in st.session_state:
         st.session_state.testcases_generated = False
+    if "testcases_df" not in st.session_state:
+        st.session_state.testcases_df = None
+    if "fetched_jira_issue_key" not in st.session_state:
+        st.session_state.fetched_jira_issue_key = ""
+    if "sync_history" not in st.session_state:
+        st.session_state.sync_history = []
 
     # --- Use Case Upload / Jira Fetch ---
     st.subheader("📥 Upload, Paste, or Fetch Use Case from Jira")
@@ -135,8 +164,8 @@ if st.session_state.logged_in:
     with st.expander("🔁 Fetch Use Case from Jira"):
         st.write("Provide your Jira site, credentials (email + API token) and the issue key to fetch the issue description.")
         jira_url = st.text_input("Jira Base URL (e.g., https://yourorg.atlassian.net)", value=JIRA_BASE_URL, key="jira_url")
-        jira_email = st.text_input("Jira Email (or username)", key="jira_email")
-        jira_api_token = st.text_input("Jira API Token (create at id.atlassian.com/manage-profile/security/api-tokens)", type="password", key="jira_api_token")
+        jira_email = st.text_input("Jira Email (or username)", value=JIRA_EMAIL, key="jira_email")
+        jira_api_token = st.text_input("Jira API Token (create at id.atlassian.com/manage-profile/security/api-tokens)", type="password",value=JIRA_API_TOKEN, key="jira_api_token")
         jira_issue_key = st.text_input("Jira Issue Key (e.g., PROJ-123)", key="jira_issue_key")
         if st.button("Fetch from Jira"):
             if not (jira_url and jira_email and jira_api_token and jira_issue_key):
@@ -156,10 +185,23 @@ if st.session_state.logged_in:
                         fetched_text = data.get("fields", {}).get("summary", "")
                     st.session_state.usecase_text = fetched_text
                     st.session_state.fetched_from_jira = True
-                    # Auto-enable using the fetched use case as BRD
-                    st.session_state.use_usecase_as_brd = True
+                    st.session_state.fetched_jira_issue_key = jira_issue_key
+                    # Log to history
+                    st.session_state.sync_history.append({
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "action": "Jira Fetch",
+                        "issue_key": jira_issue_key,
+                        "status": "✅ Success"
+                    })
                     st.success("Fetched use case and populated the text area.")
                 except Exception as e:
+                    # Log failure to history
+                    st.session_state.sync_history.append({
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "action": "Jira Fetch",
+                        "issue_key": jira_issue_key,
+                        "status": f"❌ Failed: {str(e)[:50]}"
+                    })
                     st.error(f"Failed to fetch from Jira: {e}")
 
     # If a Jira fetch was performed, hide paste/upload options and use fetched text as BRD.
@@ -181,13 +223,12 @@ if st.session_state.logged_in:
         # Use the fetched usecase as the final_usecase
         final_usecase = st.session_state.get("usecase_text", "")
         usecase_text = final_usecase
-        # Ensure the internal checkbox state reflects that we are using the usecase as BRD
-        st.session_state.use_usecase_as_brd = True
 
     # --- Manual BRD Generation ---
     # Only show manual BRD generation when the user did not fetch from Jira
     if (not st.session_state.get("fetched_from_jira")) and final_usecase and st.button("📝 Generate BRD Manually"):
         with st.spinner("Generating BRD from use case..."):
+            today = datetime.now().strftime("%B %d,%Y")
             brd_prompt = f"Create a detailed Business Requirements Document (BRD) with today's date ({today}) based on the following Guidewire PolicyCenter use case:\n\n{final_usecase}"
             response = model.generate_content(brd_prompt)
             st.session_state.brd_text = (
@@ -197,8 +238,6 @@ if st.session_state.logged_in:
             )
             # If user generated a BRD manually, clear the Jira-fetch flag
             st.session_state.fetched_from_jira = False
-            # Clear any auto-use flag when manual BRD was created
-            st.session_state.use_usecase_as_brd = False
     # --- Download BRD (Optional) ---
     # Hide BRD download when the session is using the fetched Jira use case as BRD
     if st.session_state.brd_text and not st.session_state.get("fetched_from_jira"):
@@ -282,20 +321,34 @@ if st.session_state.logged_in:
             df_result.to_excel(writer, index=False, sheet_name="TestCases")
         excel_buffer.seek(0)
 
+        csv_data = df_result.to_csv(index=False).encode("utf-8")
+        
         st.download_button("⬇️ Download Excel", data=excel_buffer,
                         file_name="test_cases.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        st.download_button("⬇️ Download CSV", data=df_result.to_csv(index=False).encode("utf-8"),
+        st.download_button("⬇️ Download CSV", data=csv_data,
                         file_name="test_cases.csv", mime="text/csv")
 
+        # Store the dataframe and CSV data for Jira attachment
         st.session_state.testcases_generated = True
+        st.session_state.testcases_df = df_result
+        st.session_state.testcases_csv_data = csv_data.decode("utf-8")
+        # Log to history
+        st.session_state.sync_history.append({
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "action": "Test Cases Generated",
+            "issue_key": st.session_state.get("fetched_jira_issue_key", "N/A"),
+            "status": f"✅ Generated {len(df_result)} test cases"
+        })
 
     # --- Generate Test Cases ---
-    # If Jira fetch was used, auto-check the use-as-BRD checkbox and hide BRD UI.
+    # If Jira fetch was used, treat the use case as BRD automatically
     if st.session_state.get("fetched_from_jira"):
-        st.session_state.use_usecase_as_brd = True
+        use_usecase_as_brd = True
+    else:
+        use_usecase_as_brd = st.session_state.get("use_usecase_as_brd", False)
 
-    # If fetched and checkbox enabled and a template is present, auto-generate test cases once.
-    if st.session_state.get("use_usecase_as_brd") and st.session_state.get("usecase_text") and template_columns and not st.session_state.get("testcases_generated"):
+    # If fetched and checkbox/flag enabled and a template is present, auto-generate test cases once.
+    if use_usecase_as_brd and st.session_state.get("usecase_text") and template_columns and not st.session_state.get("testcases_generated"):
         generate_test_cases(st.session_state.usecase_text, template_columns)
 
     # When not auto-generating, show the manual Generate Test Cases button (also hidden when fetched-from-jira flow is active)
@@ -312,3 +365,62 @@ if st.session_state.logged_in:
 
             if brd_to_use:
                 generate_test_cases(brd_to_use, template_columns)
+
+    # --- Attach Test Cases to Jira ---
+    if st.session_state.get("testcases_generated") and st.session_state.get("testcases_csv_data"):
+        st.divider()
+        st.subheader("📎 Attach Test Cases to Jira")
+        
+        with st.expander("🔗 Attach CSV to Jira Issue"):
+            st.write("Attach the generated test cases CSV to the Jira issue.")
+            
+            # If we fetched from Jira, pre-fill the issue key
+            jira_url_attach = st.text_input("Jira Base URL", value=JIRA_BASE_URL, key="jira_url_attach")
+            jira_email_attach = st.text_input("Jira Email",value=JIRA_EMAIL, key="jira_email_attach")
+            jira_api_token_attach = st.text_input("Jira API Token", type="password",value=JIRA_API_TOKEN, key="jira_api_token_attach")
+            jira_issue_key_attach = st.text_input(
+                "Jira Issue Key", 
+                value=st.session_state.get("fetched_jira_issue_key", ""),
+                key="jira_issue_key_attach"
+            )
+            
+            if st.button("📤 Attach CSV to Jira"):
+                if not (jira_url_attach and jira_email_attach and jira_api_token_attach and jira_issue_key_attach):
+                    st.warning("Please provide all Jira details.")
+                else:
+                    success = attach_csv_to_jira(
+                        jira_url_attach,
+                        jira_email_attach,
+                        jira_api_token_attach,
+                        jira_issue_key_attach,
+                        st.session_state.testcases_csv_data
+                    )
+                    if success:
+                        st.session_state.sync_history.append({
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "action": "CSV Attached to Jira",
+                            "issue_key": jira_issue_key_attach,
+                            "status": "✅ Success"
+                        })
+                        st.success(f"✅ Test cases CSV successfully attached to {jira_issue_key_attach}!")
+                    else:
+                        st.session_state.sync_history.append({
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "action": "CSV Attached to Jira",
+                            "issue_key": jira_issue_key_attach,
+                            "status": "❌ Failed"
+                        })
+
+    # --- Session History Display ---
+    if st.session_state.sync_history:
+        st.divider()
+        st.subheader("📜 Session Activity History")
+        
+        with st.expander("View Sync History"):
+            history_df = pd.DataFrame(st.session_state.sync_history)
+            st.dataframe(history_df, use_container_width=True, hide_index=True)
+            
+            # Add option to clear history
+            if st.button("🗑️ Clear History"):
+                st.session_state.sync_history = []
+                st.rerun()
