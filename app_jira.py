@@ -39,7 +39,7 @@ if not st.session_state.logged_in:
             st.success("Welcome to the Test Case Generator!")
             st.rerun()
         else:
-            st.error("Invalid username or password. Please try again.")
+            st.error("Invalid username or password. Please check your credentials and try again.")
 
 
 if st.session_state.logged_in:
@@ -214,7 +214,7 @@ if st.session_state.logged_in:
                         summary = data.get("fields", {}).get("summary", "")
                         if summary and summary.strip():
                             fetched_text = summary
-                            st.warning(f"⚠️ No description found for issue {jira_issue_key}. Using summary instead.")
+                            st.warning(f"⚠️ No description found for issue {jira_issue_key}. Please check the issue details or add a description before proceeding.")
                         else:
                             st.error(f"❌ No description or summary available for issue {jira_issue_key}. Please add a description to this issue.")
                             st.session_state.sync_history.append({
@@ -234,7 +234,6 @@ if st.session_state.logged_in:
                             "issue_key": jira_issue_key,
                             "status": "✅ Success"
                         })
-                        st.success("Fetched use case and populated the text area.")
                 except Exception as e:
                     # Log failure to history
                     st.session_state.sync_history.append({
@@ -262,9 +261,9 @@ if st.session_state.logged_in:
     else:
         fetched_text = st.session_state.get("usecase_text", "")
         if not fetched_text or fetched_text.strip() == "":
-            st.info("Jira use case fetched — no description. Upload a template to generate test cases.")
+            st.info("Jira use case fetched — no description. Please check use case.")
         else:
-            st.info("Jira use case fetched — upload a template to generate test cases.")
+            st.success("Jira use case fetched — upload a template to generate test cases.")
         # Use the fetched usecase as the final_usecase
         final_usecase = fetched_text
         usecase_text = final_usecase
@@ -275,7 +274,13 @@ if st.session_state.logged_in:
         with st.spinner("Generating BRD from use case..."):
             today = datetime.now().strftime("%B %d,%Y")
             brd_prompt = f"Create a detailed Business Requirements Document (BRD) with today's date ({today}) based on the following Guidewire PolicyCenter use case:\n\n{final_usecase}"
+        try:
             response = model.generate_content(brd_prompt)
+            st.success("BRD generated successfully. Please upload testcase template to proceed.")
+        except Exception as e:
+            st.error(f'BRD generation failed. Possible issue with AI model or input text. Details: {e}')
+            response = None
+
             st.session_state.brd_text = (
                 response.candidates[0].content.parts[0].text.strip()
                 if response and response.candidates and response.candidates[0].content.parts
@@ -336,7 +341,13 @@ if st.session_state.logged_in:
             """
 
         with st.spinner("Generating Test Cases..."):
-            response = model.generate_content(prompt_test_cases)
+            try:
+                response = model.generate_content(prompt_test_cases)
+                st.success("Test cases generated successfully.")
+            except Exception as e:
+                st.error(f'Test case generation failed. Please verify BRD content and template format. Details: {e}')
+                response = None
+
             output_text = (
                 response.candidates[0].content.parts[0].text.strip()
                 if response and response.candidates and response.candidates[0].content.parts
@@ -442,14 +453,15 @@ if st.session_state.logged_in:
                         st.session_state.testcases_csv_data
                     )
                     if success:
+                        st.session_state.attach_message = f'✅ Test cases CSV successfully attached to {jira_issue_key_attach}!'
                         st.session_state.sync_history.append({
                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "action": "CSV Attached to Jira",
                             "issue_key": jira_issue_key_attach,
                             "status": "✅ Success"
                         })
-                        st.success(f"✅ Test cases CSV successfully attached to {jira_issue_key_attach}!")
                     else:
+                        st.session_state.attach_message = f'❌ Failed to attach CSV to {jira_issue_key_attach}. Please check Jira details.'
                         st.session_state.sync_history.append({
                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "action": "CSV Attached to Jira",
@@ -481,20 +493,27 @@ if st.session_state.logged_in:
                         st.session_state.testcases_excel_data
                     )
                     if success:
+                        st.session_state.attach_message = f'✅ Test cases Excel successfully attached to {jira_issue_key_attach_excel}!'
                         st.session_state.sync_history.append({
                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "action": "Excel Attached to Jira",
                             "issue_key": jira_issue_key_attach_excel,
                             "status": "✅ Success"
                         })
-                        st.success(f"✅ Test cases Excel successfully attached to {jira_issue_key_attach_excel}!")
                     else:
+                        st.session_state.attach_message = f'❌ Failed to attach Excel to {jira_issue_key_attach_excel}. Please check Jira details.'
                         st.session_state.sync_history.append({
                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "action": "Excel Attached to Jira",
                             "issue_key": jira_issue_key_attach_excel,
                             "status": "❌ Failed"
                         })
+
+if 'attach_message' in st.session_state:
+    if st.session_state.attach_message.startswith("✅"):
+        st.success(st.session_state.attach_message)
+    elif st.session_state.attach_message.startswith("❌"):
+        st.error(st.session_state.attach_message)
 
     # --- Session History Display ---
     if st.session_state.sync_history:
